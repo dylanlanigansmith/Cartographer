@@ -75,15 +75,20 @@ static int init_hook( struct ftrace_hook *hook )
 }
 
 static void notrace ftrace_thunk(unsigned long ip, unsigned long parent_ip,
-                                    struct ftrace_ops *ops, struct pt_regs *regs)
+                                    struct ftrace_ops *ops, struct ftrace_regs *regs)
 {
     struct ftrace_hook *hook = container_of(ops, struct ftrace_hook, ops);
 
 #if USE_FENTRY_OFFSET
     regs->ip = (unsigned long) hook->function;
 #else
-    if (!within_module(parent_ip, THIS_MODULE))
-        regs->ip = (unsigned long) hook->function;
+    if (!within_module(parent_ip, THIS_MODULE)) {
+        //in kernels 6.something and higher this is how you get pt_regs now
+        struct pt_regs *regs_pt;
+        regs_pt = ftrace_get_regs(regs);
+         regs_pt->ip = (unsigned long) hook->function; 
+    }
+
 #endif
 }
 
@@ -120,17 +125,17 @@ static asmlinkage void cart_show_map_vma(struct seq_file *m,
 
     if( settings.spoof_permissions ){
         cart_print("show_map_vma Hook - Setting permissions on (%s)\n", vma->vm_file->f_path.dentry->d_iname);
-        vma->vm_flags &= ~VM_READ;
-        vma->vm_flags &= ~VM_WRITE;
-        vma->vm_flags &= ~VM_EXEC;
+        //vma->vm_flags &= ~VM_READ;
+        //vma->vm_flags &= ~VM_WRITE;
+        //vma->vm_flags &= ~VM_EXEC;
 
-        vma->vm_flags |= settings.permissions;
+       // vma->vm_flags |= settings.permissions;
     }
 
 
     orig_show_map_vma( m, vma );
 
-    vma->vm_flags = backup_flags;
+  //  vma->vm_flags = backup_flags;
     vma->vm_file = file_backup;
 }
 
@@ -269,17 +274,19 @@ static int cart_startup(void)
 {
     int ret;
     struct proc_dir_entry *entry;
-
+    cart_print("Cartographing");
     if( init_kallsyms() ){
         cart_print( "Error initing kallsyms hack.\n" );
         return -EAGAIN;
     }
+     cart_print("Cartographing 2");
     show_map_vma_hook.name = "show_map_vma";
     show_map_vma_hook.address = kallsyms_lookup_name( "show_map_vma" );
     if( !show_map_vma_hook.address ){
         cart_print( "Error resolving the show_map_vma Address\n" );
         return -ENXIO;
     }
+     cart_print("Cartographing 3");
     //show_map_vma_hook.name = "show_map_vma";
     show_map_vma_hook.function = cart_show_map_vma;
     show_map_vma_hook.original = &orig_show_map_vma;
@@ -290,7 +297,7 @@ static int cart_startup(void)
 
     show_map_vma_hook.ops.func = ftrace_thunk;
     show_map_vma_hook.ops.flags = FTRACE_OPS_FL_SAVE_REGS
-                                  | FTRACE_OPS_FL_RECURSION_SAFE
+                                  | FTRACE_OPS_FL_RECURSION //_SAFE
                                   | FTRACE_OPS_FL_IPMODIFY;
 
     ret = ftrace_set_filter_ip(&show_map_vma_hook.ops, show_map_vma_hook.address, 0, 0);

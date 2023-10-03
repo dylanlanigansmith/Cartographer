@@ -34,7 +34,11 @@ unsigned long kallsyms_lookup_name(const char *name)
 {
 	return ((unsigned long(*)(const char *))funcs->old_func)(name);
 }
-
+/*
+unsigned long kallsyms_lookup_name(const char *name)
+{
+    return ((unsigned long(*)(const char *))kallsyms_lookup_name)(name);
+}*/
 int init_kallsyms(void)
 {
 	int r = klp_enable_patch(&patch);

@@ -34,6 +34,10 @@ MODULE_INFO(livepatch, "Y");
  */
 #define USE_FENTRY_OFFSET 0
 
+#define KERNEL63
+
+#define USE_DEFAULTS
+#define DEFAULT_LIB "libhidden.example" //patch for my specific use case, could be done better ofc
 
 /*
  * Tail call optimization can interfere with recursion detection based on
@@ -73,9 +77,9 @@ static int init_hook( struct ftrace_hook *hook )
 
     return 0;
 }
-
+#ifdef KERNEL63
 static void notrace ftrace_thunk(unsigned long ip, unsigned long parent_ip,
-                                    struct ftrace_ops *ops, struct ftrace_regs *regs)
+                                    struct ftrace_ops *ops, struct ftrace_regs *regs) //changed 
 {
     struct ftrace_hook *hook = container_of(ops, struct ftrace_hook, ops);
 
@@ -91,6 +95,21 @@ static void notrace ftrace_thunk(unsigned long ip, unsigned long parent_ip,
 
 #endif
 }
+#else
+static void notrace ftrace_thunk(unsigned long ip, unsigned long parent_ip,
+                                    struct ftrace_ops *ops, struct pt_regs *regs)
+{
+    struct ftrace_hook *hook = container_of(ops, struct ftrace_hook, ops);
+
+#if USE_FENTRY_OFFSET
+    regs->ip = (unsigned long) hook->function;
+#else
+    if (!within_module(parent_ip, THIS_MODULE))
+        regs->ip = (unsigned long) hook->function;
+#endif
+}
+#endif
+
 
 static asmlinkage void (*orig_show_map_vma)(struct seq_file *m,
                                           struct vm_area_struct *vma);
@@ -125,11 +144,27 @@ static asmlinkage void cart_show_map_vma(struct seq_file *m,
 
     if( settings.spoof_permissions ){
         cart_print("show_map_vma Hook - Setting permissions on (%s)\n", vma->vm_file->f_path.dentry->d_iname);
-        //vma->vm_flags &= ~VM_READ;
-        //vma->vm_flags &= ~VM_WRITE;
-        //vma->vm_flags &= ~VM_EXEC;
-
-       // vma->vm_flags |= settings.permissions;
+    /*From: https://lore.kernel.org/lkml/20230312175703.d8d8e0192387dfa9592ee8e5@linux-foundation.org/
+     * Since KERNEL 6.3
+	 * "Flags, see mm.h.
+	 * To modify use vm_flags_{init|reset|set|clear|mod} functions."" -https://elixir.bootlin.com/linux/latest/source/include/linux/mm_types.h
+     * 
+     * https://elixir.bootlin.com/linux/latest/C/ident/vm_flags_init
+	 */
+        //UNTESTED!!
+        #ifdef KERNEL63
+            vm_flags_t flags = vma->vm_flags;
+            flags &= ~VM_READ;
+            flags &= ~VM_WRITE;
+            flags &= ~VM_EXEC;
+            flags |= settings.permissions;
+            vm_flags_set(vma, flags);
+        #else    
+            vma->vm_flags &= ~VM_READ;
+            vma->vm_flags &= ~VM_WRITE;
+            vma->vm_flags &= ~VM_EXEC;
+            vma->vm_flags |= settings.permissions;
+        #endif
     }
 
 
@@ -274,19 +309,19 @@ static int cart_startup(void)
 {
     int ret;
     struct proc_dir_entry *entry;
-    cart_print("Cartographing");
+    cart_print("Cartographing ..."); //debug
     if( init_kallsyms() ){
         cart_print( "Error initing kallsyms hack.\n" );
         return -EAGAIN;
     }
-     cart_print("Cartographing 2");
+     
     show_map_vma_hook.name = "show_map_vma";
     show_map_vma_hook.address = kallsyms_lookup_name( "show_map_vma" );
     if( !show_map_vma_hook.address ){
         cart_print( "Error resolving the show_map_vma Address\n" );
         return -ENXIO;
     }
-     cart_print("Cartographing 3");
+     
     //show_map_vma_hook.name = "show_map_vma";
     show_map_vma_hook.function = cart_show_map_vma;
     show_map_vma_hook.original = &orig_show_map_vma;
@@ -325,6 +360,18 @@ static int cart_startup(void)
         cart_print("Failed to allocate Memory for libname(init)\n");
         return -ENOMEM;
     }
+
+    
+
+    #ifdef USE_DEFAULTS
+        cart_print("");
+        settings.remove_entry = true;
+        
+        strncpy( settings.target_lib, DEFAULT_LIB, sizeof(char) * 63 );
+        cart_print("Using Default Configuration: Remove(%i) Target(%s)", settings.remove_entry, settings.target_lib);
+        
+
+    #endif
 
     cart_print("Cartographer Loading complete.\n");
     return 0;
